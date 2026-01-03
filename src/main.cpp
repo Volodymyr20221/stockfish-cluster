@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QString>
+#include <QTimer>
 
 #include "infra/ServerConfigRepository.hpp"
 #include "infra/HistoryRepository.hpp"
@@ -46,23 +47,40 @@ int main(int argc, char* argv[]) {
         w.notifyJobAddedOrUpdated(job);
         netController.handleJobAddedOrUpdated(job);
     };
+
     cb.onJobUpdated = [&](const sf::client::domain::Job& job) {
         // UI must update on every change, including remote progress updates.
         w.notifyJobAddedOrUpdated(job);
 
         // IMPORTANT:
+        // We must submit job when it transitions from Pending -> Queued (server became available).
+        // Otherwise the UI shows Queued but server never receives it.
+        if (job.status == sf::client::domain::JobStatus::Queued) {
+            netController.handleJobAddedOrUpdated(job);
+            return;
+        }
+
         // Do NOT echo remote job_update back to the server (would create a feedback loop).
         // We only send a cancel request when the user stops a job locally.
         if (job.status == sf::client::domain::JobStatus::Stopped) {
             netController.handleJobRemoved(job); // sends job_cancel
         }
     };
+
     cb.onJobRemoved = [&](const sf::client::domain::Job& job) {
         w.notifyJobRemoved(job);
         netController.handleJobRemoved(job);
     };
 
     jobManager.setCallbacks(std::move(cb));
+
+    // Minimal: periodically try to dispatch pending jobs if capacity appears (server online / job finished).
+    QTimer dispatchTimer;
+    dispatchTimer.setInterval(1200); // not too frequent, not suspicious
+    QObject::connect(&dispatchTimer, &QTimer::timeout, [&]() {
+        jobManager.tryDispatchPendingJobs();
+    });
+    dispatchTimer.start();
 
     return app.exec();
 }

@@ -12,6 +12,33 @@ namespace sf::client::app {
 
 using namespace sf::client::domain;
 
+namespace {
+
+inline bool isTerminal(JobStatus s) {
+    return s == JobStatus::Finished ||
+           s == JobStatus::Error ||
+           s == JobStatus::Cancelled ||
+           s == JobStatus::Stopped;
+}
+
+inline int effectiveMaxJobs(const ServerInfo& s) {
+    if (s.runtime.maxJobs > 0) return s.runtime.maxJobs;
+    if (s.maxJobs > 0) return s.maxJobs;
+    return 0;
+}
+
+inline void recalcLoad(ServerInfo& s) {
+    const int maxJobs = effectiveMaxJobs(s);
+    if (maxJobs > 0) {
+        s.runtime.loadPercent =
+            100.0 * static_cast<double>(s.runtime.runningJobs) / static_cast<double>(maxJobs);
+    } else {
+        s.runtime.loadPercent = 0.0;
+    }
+}
+
+} // namespace
+
 JobManager::JobManager(ServerManager& serverManager,
                        sf::client::app::IHistoryRepository* historyRepo)
     : serverManager_(serverManager)
@@ -54,11 +81,62 @@ const Job* JobManager::findJob(const JobId& id) const {
     return nullptr;
 }
 
+void JobManager::tryDispatchPendingJobs() {
+    // Dispatch as many pending jobs as we can (capacity-based).
+    while (tryDispatchOnePendingJob()) {
+        // keep dispatching
+    }
+}
+
+bool JobManager::tryDispatchOnePendingJob() {
+    // FIFO: jobs_ is append-only for new jobs; so first Pending wins.
+    for (auto& job : jobs_) {
+        if (job.status != JobStatus::Pending) {
+            continue;
+        }
+
+        // If user chose a specific server earlier, we may have kept it in assignedServer
+        // while Pending (as a pin). If it's set, treat it as preferred.
+        std::optional<std::string> preferred;
+        if (job.assignedServer.has_value()) {
+            preferred = job.assignedServer;
+        }
+
+        auto* srv = serverManager_.pickServerForJob(preferred);
+        if (!srv) {
+            // Can't dispatch this job right now; try next Pending (maybe it is Auto).
+            continue;
+        }
+
+        // Assign + optimistic load accounting
+        job.assignedServer = srv->id;
+        job.status = JobStatus::Queued;
+        job.lastUpdateAt = Clock::now();
+        job.logLines.push_back("Server available: queued on " + srv->id + ".");
+
+        srv->runtime.runningJobs++;
+        if (srv->runtime.maxJobs <= 0) {
+            srv->runtime.maxJobs = (srv->maxJobs > 0 ? srv->maxJobs : 0);
+        }
+        recalcLoad(*srv);
+
+        if (callbacks_.onJobUpdated) {
+            callbacks_.onJobUpdated(job); // main.cpp will send job_submit_or_update
+        }
+        return true; // dispatched one
+    }
+    return false;
+}
+
 JobId JobManager::enqueueJob(const std::string& opponent,
                              const std::string& fen,
                              const SearchLimit& limit,
                              int multiPv,
                              std::optional<std::string> preferredServer) {
+    // Important: if some old jobs are Pending but server already has free slots,
+    // dispatch them first (FIFO).
+    tryDispatchPendingJobs();
+
     Job job;
     job.id           = makeJobId();
     job.opponent     = opponent;
@@ -78,14 +156,18 @@ JobId JobManager::enqueueJob(const std::string& opponent,
         if (srv->runtime.maxJobs <= 0) {
             srv->runtime.maxJobs = (srv->maxJobs > 0 ? srv->maxJobs : 0);
         }
-        if (srv->runtime.maxJobs > 0) {
-            srv->runtime.loadPercent =
-                100.0 * static_cast<double>(srv->runtime.runningJobs) /
-                static_cast<double>(srv->runtime.maxJobs);
-        }
+        recalcLoad(*srv);
     } else {
         // No server available right now.
         job.status = JobStatus::Pending;
+
+        // Keep pin if user selected a specific server: we store it in assignedServer
+        // while Pending, and treat it as preferred during dispatch.
+        // For Auto (nullopt) this stays empty.
+        if (preferredServer && !preferredServer->empty()) {
+            job.assignedServer = preferredServer;
+        }
+
         job.logLines.push_back("No available server (Offline/Busy).");
     }
 
@@ -127,15 +209,10 @@ void JobManager::removeJobAtIndex(std::size_t index) {
                 if (s.runtime.runningJobs > 0) {
                     s.runtime.runningJobs--;
                 }
-                const int maxJobs = (s.runtime.maxJobs > 0 ? s.runtime.maxJobs
-                                                           : (s.maxJobs > 0 ? s.maxJobs : 0));
-                if (maxJobs > 0) {
-                    s.runtime.loadPercent =
-                        100.0 * static_cast<double>(s.runtime.runningJobs) /
-                        static_cast<double>(maxJobs);
-                } else {
-                    s.runtime.loadPercent = 0.0;
+                if (s.runtime.maxJobs <= 0) {
+                    s.runtime.maxJobs = (s.maxJobs > 0 ? s.maxJobs : 0);
                 }
+                recalcLoad(s);
             }
         }
     }
@@ -147,6 +224,9 @@ void JobManager::removeJobAtIndex(std::size_t index) {
     if (callbacks_.onJobRemoved) {
         callbacks_.onJobRemoved(jobCopy);
     }
+
+    // Removing a job may free capacity -> try dispatch pending.
+    tryDispatchPendingJobs();
 }
 
 void JobManager::requestStopJob(const JobId& id) {
@@ -178,13 +258,15 @@ void JobManager::applyRemoteUpdate(const JobId& id,
         }
 
         Job& job = jobs_[i];
+        const JobStatus prevStatus = job.status;
 
         if (!job.startedAt && status == JobStatus::Running) {
             job.startedAt = Clock::now();
         }
         if ((status == JobStatus::Finished ||
              status == JobStatus::Error ||
-             status == JobStatus::Cancelled) &&
+             status == JobStatus::Cancelled ||
+             status == JobStatus::Stopped) &&
             !job.finishedAt) {
             job.finishedAt = Clock::now();
         }
@@ -204,13 +286,17 @@ void JobManager::applyRemoteUpdate(const JobId& id,
             callbacks_.onJobUpdated(job);
         }
 
-        // Persist finished/failed/cancelled jobs but keep them visible in the UI.
-        if (status == JobStatus::Finished ||
-            status == JobStatus::Error ||
-            status == JobStatus::Cancelled ||
-            status == JobStatus::Stopped) {
+        // Persist finished/failed/cancelled/stopped jobs but keep them visible in the UI.
+        if (isTerminal(status)) {
             persistIfTerminal(job);
         }
+
+        // If a job just became terminal, try dispatch pending ones.
+        // This fixes "queue ended but one job still Pending".
+        if (!isTerminal(prevStatus) && isTerminal(status)) {
+            tryDispatchPendingJobs();
+        }
+
         return;
     }
 }
@@ -245,12 +331,12 @@ void JobManager::upsertRemoteJob(const sf::client::domain::Job& remote) {
             callbacks_.onJobUpdated(job);
         }
 
-        if (job.status == JobStatus::Finished ||
-            job.status == JobStatus::Error ||
-            job.status == JobStatus::Cancelled ||
-            job.status == JobStatus::Stopped) {
+        if (isTerminal(job.status)) {
             persistIfTerminal(job);
         }
+
+        // After reconnect/upsert we may have new capacity visible -> attempt dispatch.
+        tryDispatchPendingJobs();
         return;
     }
 
@@ -259,12 +345,12 @@ void JobManager::upsertRemoteJob(const sf::client::domain::Job& remote) {
     if (callbacks_.onJobAdded) {
         callbacks_.onJobAdded(jobs_.back());
     }
-    if (remote.status == JobStatus::Finished ||
-        remote.status == JobStatus::Error ||
-        remote.status == JobStatus::Cancelled ||
-        remote.status == JobStatus::Stopped) {
+    if (isTerminal(remote.status)) {
         persistIfTerminal(jobs_.back());
     }
+
+    // After discovering remote jobs, try dispatch local pending ones too.
+    tryDispatchPendingJobs();
 }
 
 } // namespace sf::client::app

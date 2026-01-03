@@ -50,6 +50,10 @@ public:
     // still running on the server (or finished while the client was offline).
     void upsertRemoteJob(const sf::client::domain::Job& remote);
 
+    // Re-try assigning servers for Pending jobs (when capacity becomes available).
+    // Safe to call often (e.g. after server_status updates).
+    void tryDispatchPendingJobs();
+
 private:
     sf::client::domain::JobId makeJobId();
     sf::client::domain::Job*       findJob(const sf::client::domain::JobId& id);
@@ -57,6 +61,9 @@ private:
 
     void removeJobAtIndex(std::size_t index);
     void persistIfTerminal(const sf::client::domain::Job& job);
+
+    // Assign server to one pending job (if possible) and notify callbacks.
+    bool tryDispatchOnePendingJob();
 
     ServerManager&                         serverManager_;
     sf::client::app::IHistoryRepository*  historyRepo_;
