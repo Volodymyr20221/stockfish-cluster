@@ -642,12 +642,16 @@ class ClusterServer:
             line["multipv"] = int(mpv)
             lines.append(line)
 
-        # snapshot = multipv 1 (top line), enriched with bestmove.
+        # snapshot = multipv 1 (top line), enriched with bestmove and multipv lines.
         snap = dict(rec.last_by_mpv.get(1, {}) or rec.last_by_mpv.get("1", {}) or {})
         if rec.bestmove:
             snap["bestmove"] = rec.bestmove
         if snap:
             snap["multipv"] = 1
+
+        # Include MultiPV lines inside snapshot (client expects snapshot.lines)
+        if lines:
+            snap["lines"] = lines
 
         return {
             "id": rec.job_id,
@@ -662,7 +666,6 @@ class ClusterServer:
             "finished_at_ms": int(rec.finished_at_ms) if rec.finished_at_ms is not None else None,
             "last_update_ms": int(rec.last_update_ms),
             "snapshot": snap,
-            "lines": lines,
             "log_tail": list(rec.log)[-log_tail:],
         }
 
