@@ -33,6 +33,8 @@ add_executable(sf_cluster_client
     net/JobConnection.cpp
     net/JobNetworkController.hpp
     net/JobNetworkController.cpp
+    net/iccf/IccfXfccSoap.hpp
+    net/iccf/IccfXfccSoap.cpp
 
     ui/JobsModel.hpp
     ui/JobsModel.cpp
