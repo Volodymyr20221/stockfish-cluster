@@ -23,6 +23,9 @@ add_executable(sf_cluster_client
     infra/ServerConfigRepository.cpp
     infra/HistoryRepository.hpp
     infra/HistoryRepository.cpp
+    infra/iccf/IccfModels.hpp
+    infra/iccf/IccfXfccParser.hpp
+    infra/iccf/IccfXfccParser.cpp
 
     app/ServerManager.hpp
     app/ServerManager.cpp
