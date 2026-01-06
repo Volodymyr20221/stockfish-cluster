@@ -9,6 +9,7 @@
 #include "app/ServerManager.hpp"
 
 class QLineEdit;
+class QFormLayout;
 class QSpinBox;
 class QComboBox;
 class QPushButton;
@@ -17,11 +18,12 @@ class QPlainTextEdit;
 class QTabWidget;
 class QTimer;
 class QItemSelectionModel;
+class QVBoxLayout;
 
 namespace sf::client::app {
 class IHistoryRepository;
 }
-class QVBoxLayout;
+
 namespace sf::client::ui {
 
 class BoardWidget;
@@ -30,8 +32,8 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow(sf::client::app::JobManager&     jobManager,
-               sf::client::app::ServerManager&  serverManager,
+    MainWindow(sf::client::app::JobManager& jobManager,
+               sf::client::app::ServerManager& serverManager,
                sf::client::app::IHistoryRepository* historyRepo = nullptr,
                QWidget* parent = nullptr);
     ~MainWindow() override;
@@ -66,20 +68,25 @@ private:
     void ensureLastRowSelectedIfNone();
     void refreshSelectedJobDetails();
 
+    void updatePositionInputModeUi();
+
     // UI detail view helpers (reduce branching / keep same abstraction level)
     void clearDetailsView();
     void showJobDetails(const sf::client::domain::Job& job);
     void updateLogView(const sf::client::domain::Job& job);
     void updatePvAndBoardView(const sf::client::domain::Job& job);
 
-
     std::vector<sf::client::domain::Job> collectJobsForExport() const;
 
 private:
     QWidget*        centralWidget_{nullptr};
 
+    QFormLayout*    topFormLayout_{nullptr};
+
     QLineEdit*      opponentLineEdit_{nullptr};
     QLineEdit*      fenLineEdit_{nullptr};
+    QComboBox*      positionInputCombo_{nullptr};
+    QPlainTextEdit* movesPlainTextEdit_{nullptr};
 
     QComboBox*      limitTypeCombo_{nullptr};
     QSpinBox*       limitValueSpin_{nullptr};

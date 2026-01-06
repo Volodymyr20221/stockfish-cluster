@@ -17,6 +17,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QOverload>
 #include <QSignalBlocker>
 #include <QPushButton>
 #include <QSpinBox>
@@ -32,6 +33,7 @@
 #include <unordered_set>
 
 #include "domain/domain_model.hpp"
+#include "domain/chess_san_to_fen.hpp"
 #include "ui/BoardWidget.hpp"
 #include "ui/JobExporter.hpp"
 #include "infra/HistoryRepository.hpp"
@@ -98,10 +100,24 @@ void MainWindow::setupMenu() {
 }
 
 void MainWindow::setupTopForm(QVBoxLayout* mainLayout) {
-    auto* formLayout = new QFormLayout();
+    topFormLayout_ = new QFormLayout();
+    auto* formLayout = topFormLayout_;
 
     opponentLineEdit_ = new QLineEdit(centralWidget_);
-    fenLineEdit_      = new QLineEdit(centralWidget_);
+
+    positionInputCombo_ = new QComboBox(centralWidget_);
+    positionInputCombo_->addItem(tr("FEN"), QVariant(QStringLiteral("fen")));
+    positionInputCombo_->addItem(tr("Moves (SAN/PGN)"), QVariant(QStringLiteral("moves")));
+
+    fenLineEdit_ = new QLineEdit(centralWidget_);
+    fenLineEdit_->setPlaceholderText(
+        tr("e.g. rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"));
+
+    movesPlainTextEdit_ = new QPlainTextEdit(centralWidget_);
+    movesPlainTextEdit_->setPlaceholderText(
+        tr("Paste moves like: 1.d4 d5 2.c4 e6 3.Nf3 ..."));
+    movesPlainTextEdit_->setMinimumHeight(60);
+    movesPlainTextEdit_->setMaximumHeight(130);
 
     limitTypeCombo_ = new QComboBox(centralWidget_);
     limitTypeCombo_->addItem(tr("Depth"),
@@ -123,13 +139,18 @@ void MainWindow::setupTopForm(QVBoxLayout* mainLayout) {
     serverCombo_->addItem(tr("Auto"), QVariant(QString()));
 
     formLayout->addRow(tr("Opponent:"), opponentLineEdit_);
+    formLayout->addRow(tr("Position input:"), positionInputCombo_);
     formLayout->addRow(tr("FEN:"), fenLineEdit_);
+    formLayout->addRow(tr("Moves:"), movesPlainTextEdit_);
     formLayout->addRow(tr("Limit type:"), limitTypeCombo_);
     formLayout->addRow(tr("Limit value:"), limitValueSpin_);
     formLayout->addRow(tr("MultiPV:"), multiPvSpin_);
     formLayout->addRow(tr("Server:"), serverCombo_);
 
     mainLayout->addLayout(formLayout);
+
+    // Default mode is FEN
+    updatePositionInputModeUi();
 }
 
 void MainWindow::setupButtonsRow(QVBoxLayout* mainLayout) {
@@ -197,6 +218,13 @@ void MainWindow::setupConnections() {
             this, &MainWindow::onStartButtonClicked);
     connect(stopButton_, &QPushButton::clicked,
             this, &MainWindow::onStopButtonClicked);
+
+    if (positionInputCombo_) {
+        connect(positionInputCombo_,
+                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this,
+                &MainWindow::updatePositionInputModeUi);
+    }
 
     if (auto* selectionModel = jobsTableView_->selectionModel(); selectionModel) {
         connect(selectionModel, &QItemSelectionModel::selectionChanged,
@@ -311,19 +339,60 @@ void MainWindow::refreshServersTable() {
     rebuildServerComboPreservingSelection();
 }
 
-void MainWindow::onStartButtonClicked() {
-    const QString opponent = opponentLineEdit_->text().trimmed();
-    const QString fen      = fenLineEdit_->text().trimmed();
-
-    if (fen.isEmpty()) {
-        QMessageBox::warning(
-            this, tr("Validation error"),
-            tr("FEN must not be empty."));
+void MainWindow::updatePositionInputModeUi() {
+    if (!topFormLayout_ || !positionInputCombo_ || !fenLineEdit_ || !movesPlainTextEdit_) {
         return;
     }
 
-    const int limitTypeInt  = limitTypeCombo_->currentData().toInt();
-    const int limitValue    = limitValueSpin_->value();
+    const QString mode = positionInputCombo_->currentData().toString();
+    const bool useMoves = (mode == QStringLiteral("moves"));
+
+    topFormLayout_->setRowVisible(fenLineEdit_, !useMoves);
+    topFormLayout_->setRowVisible(movesPlainTextEdit_, useMoves);
+}
+
+
+void MainWindow::onStartButtonClicked() {
+    const QString opponent = opponentLineEdit_ ? opponentLineEdit_->text().trimmed() : QString();
+
+    QString fen;
+    const QString mode = positionInputCombo_
+                             ? positionInputCombo_->currentData().toString()
+                             : QStringLiteral("fen");
+
+    if (mode == QStringLiteral("moves")) {
+        const QString moves = movesPlainTextEdit_
+                                  ? movesPlainTextEdit_->toPlainText().trimmed()
+                                  : QString();
+
+        if (moves.isEmpty()) {
+            QMessageBox::warning(
+                this, tr("Validation error"),
+                tr("Moves must not be empty."));
+            return;
+        }
+
+        const auto res = sf::client::domain::chess::fenFromSanMoves(moves.toStdString(), std::nullopt);
+        if (!res.ok) {
+            QMessageBox::warning(
+                this, tr("Moves parse error"),
+                tr("Failed to parse/apply moves.\n\n%1").arg(QString::fromStdString(res.error)));
+            return;
+        }
+
+        fen = QString::fromStdString(res.fen);
+    } else {
+        fen = fenLineEdit_ ? fenLineEdit_->text().trimmed() : QString();
+        if (fen.isEmpty()) {
+            QMessageBox::warning(
+                this, tr("Validation error"),
+                tr("FEN must not be empty."));
+            return;
+        }
+    }
+
+    const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt() : static_cast<int>(LimitType::Depth);
+    const int limitValue    = limitValueSpin_ ? limitValueSpin_->value() : 30;
     SearchLimit limit;
 
     switch (static_cast<LimitType>(limitTypeInt)) {
@@ -339,7 +408,7 @@ void MainWindow::onStartButtonClicked() {
     }
 
     std::optional<std::string> preferredServer;
-    const QString serverId = serverCombo_->currentData().toString();
+    const QString serverId = serverCombo_ ? serverCombo_->currentData().toString() : QString();
     if (!serverId.isEmpty()) {
         preferredServer = serverId.toStdString();
     }
@@ -467,9 +536,9 @@ void MainWindow::updatePvAndBoardView(const Job& job) {
     // Prefer MultiPV lines, otherwise fallback to bestmove/pv.
     if (!job.snapshot.lines.empty()) {
         int added = 0;
-    const int maxArrows = std::clamp(job.multiPv, 1, 10);
+        const int maxArrows = std::min(3, std::clamp(job.multiPv, 1, 10));
         for (const auto& line : job.snapshot.lines) {
-            if (added >= 3) break; // keep it readable
+            if (added >= maxArrows) break; // keep it readable
             const QString pv = QString::fromStdString(line.pv).trimmed();
             const QString first = pv.split(' ', Qt::SkipEmptyParts).value(0);
             makeArrow(first, line.score, line.multipv);

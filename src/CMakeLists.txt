@@ -16,6 +16,8 @@ add_executable(sf_cluster_client
     main.cpp
 
     domain/domain_model.hpp
+    domain/chess_san_to_fen.hpp
+    domain/chess_san_to_fen.cpp
 
     infra/ServerConfigRepository.hpp
     infra/ServerConfigRepository.cpp
