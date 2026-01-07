@@ -18,6 +18,8 @@ add_executable(sf_cluster_client
     domain/domain_model.hpp
     domain/chess_san_to_fen.hpp
     domain/chess_san_to_fen.cpp
+    domain/pgn/PgnParser.hpp
+    domain/pgn/PgnParser.cpp
 
     infra/ServerConfigRepository.hpp
     infra/ServerConfigRepository.cpp
@@ -47,6 +49,8 @@ add_executable(sf_cluster_client
     ui/ServersModel.cpp
     ui/MainWindow.hpp
     ui/MainWindow.cpp
+    ui/GameViewerDialog.hpp
+    ui/GameViewerDialog.cpp
     ui/IccfGamesModel.hpp
     ui/IccfGamesModel.cpp
 
