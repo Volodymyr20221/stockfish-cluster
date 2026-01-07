@@ -1,6 +1,10 @@
 #include "ui/MainWindow.hpp"
+
 #include "app/IHistoryRepository.hpp"
+#include "app/IccfSyncManager.hpp"
+
 #include <algorithm>
+#include <unordered_set>
 
 #include <QAction>
 #include <QComboBox>
@@ -22,6 +26,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QStatusBar>
 #include <QTableView>
 #include <QItemSelectionModel>
 #include <QTabWidget>
@@ -30,13 +35,10 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-#include <unordered_set>
-
 #include "domain/domain_model.hpp"
 #include "domain/chess_san_to_fen.hpp"
 #include "ui/BoardWidget.hpp"
 #include "ui/JobExporter.hpp"
-#include "infra/HistoryRepository.hpp"
 #include <QTimeZone>
 
 namespace sf::client::ui {
@@ -49,12 +51,21 @@ MainWindow::MainWindow(sf::client::app::JobManager& jobManager,
                        sf::client::app::ServerManager& serverManager,
                        sf::client::app::IHistoryRepository* historyRepo,
                        QWidget* parent)
+    : MainWindow(jobManager, serverManager, historyRepo, /*iccfSync*/ nullptr, parent) {}
+
+MainWindow::MainWindow(sf::client::app::JobManager& jobManager,
+                       sf::client::app::ServerManager& serverManager,
+                       sf::client::app::IHistoryRepository* historyRepo,
+                       sf::client::app::IccfSyncManager* iccfSync,
+                       QWidget* parent)
     : QMainWindow(parent)
     , jobsModel_(this)
     , serversModel_(this)
+    , iccfGamesModel_(this)
     , jobManager_(jobManager)
     , serverManager_(serverManager)
-    , historyRepo_(historyRepo) {
+    , historyRepo_(historyRepo)
+    , iccfSync_(iccfSync) {
     setupUi();
     setupConnections();
     refreshServersTable();
@@ -194,6 +205,9 @@ void MainWindow::setupMainSplitter(QVBoxLayout* mainLayout) {
     boardLayout->addWidget(pvPlainTextEdit_, 0);
     detailsTabs_->addTab(boardTab, tr("Board"));
 
+    // ICCF tab
+    setupIccfTab();
+
     splitter->addWidget(jobsTableView_);
     splitter->addWidget(detailsTabs_);
     splitter->setStretchFactor(0, 3);
@@ -213,6 +227,53 @@ void MainWindow::setupServersTable(QVBoxLayout* mainLayout) {
     mainLayout->addWidget(serversTableView_);
 }
 
+void MainWindow::setupIccfTab() {
+    if (!detailsTabs_) return;
+
+    auto* tab = new QWidget(detailsTabs_);
+    auto* layout = new QVBoxLayout(tab);
+    layout->setContentsMargins(6, 6, 6, 6);
+
+    auto* form = new QFormLayout();
+
+    iccfEndpointLineEdit_ = new QLineEdit(tab);
+    iccfEndpointLineEdit_->setText(QStringLiteral("https://www.iccf.com/XfccBasic.asmx"));
+
+    iccfUsernameLineEdit_ = new QLineEdit(tab);
+    iccfPasswordLineEdit_ = new QLineEdit(tab);
+    iccfPasswordLineEdit_->setEchoMode(QLineEdit::Password);
+
+    form->addRow(tr("Endpoint:"), iccfEndpointLineEdit_);
+    form->addRow(tr("Username:"), iccfUsernameLineEdit_);
+    form->addRow(tr("Password:"), iccfPasswordLineEdit_);
+    layout->addLayout(form);
+
+    auto* buttonsLayout = new QHBoxLayout();
+    iccfRefreshButton_ = new QPushButton(tr("Refresh"), tab);
+    iccfAnalyzeButton_ = new QPushButton(tr("Analyze selected"), tab);
+    buttonsLayout->addWidget(iccfRefreshButton_);
+    buttonsLayout->addWidget(iccfAnalyzeButton_);
+    buttonsLayout->addStretch(1);
+    layout->addLayout(buttonsLayout);
+
+    iccfGamesTableView_ = new QTableView(tab);
+    iccfGamesTableView_->setModel(&iccfGamesModel_);
+    iccfGamesTableView_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    iccfGamesTableView_->setSelectionMode(QAbstractItemView::SingleSelection);
+    iccfGamesTableView_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    iccfGamesTableView_->horizontalHeader()->setStretchLastSection(true);
+    layout->addWidget(iccfGamesTableView_, 1);
+
+    // If ICCF not wired, keep UI visible but disable actions.
+    if (!iccfSync_) {
+        iccfRefreshButton_->setEnabled(false);
+        iccfAnalyzeButton_->setEnabled(false);
+        iccfUsernameLineEdit_->setPlaceholderText(tr("ICCF is not wired (use constructor overload with IccfSyncManager*)"));
+    }
+
+    detailsTabs_->addTab(tab, tr("ICCF"));
+}
+
 void MainWindow::setupConnections() {
     connect(startButton_, &QPushButton::clicked,
             this, &MainWindow::onStartButtonClicked);
@@ -229,6 +290,23 @@ void MainWindow::setupConnections() {
     if (auto* selectionModel = jobsTableView_->selectionModel(); selectionModel) {
         connect(selectionModel, &QItemSelectionModel::selectionChanged,
                 this, &MainWindow::onJobSelectionChanged);
+    }
+
+    // ICCF
+    if (iccfRefreshButton_) {
+        connect(iccfRefreshButton_, &QPushButton::clicked,
+                this, &MainWindow::onIccfRefreshClicked);
+    }
+    if (iccfAnalyzeButton_) {
+        connect(iccfAnalyzeButton_, &QPushButton::clicked,
+                this, &MainWindow::onIccfAnalyzeClicked);
+    }
+
+    if (iccfSync_) {
+        connect(iccfSync_, &sf::client::app::IccfSyncManager::gamesUpdated,
+                this, &MainWindow::onIccfGamesUpdated);
+        connect(iccfSync_, &sf::client::app::IccfSyncManager::error,
+                this, &MainWindow::onIccfError);
     }
 }
 
@@ -289,7 +367,6 @@ void MainWindow::refreshSelectedJobDetails() {
     updateLogForSelectedRow(*row);
 }
 
-
 void MainWindow::notifyJobAddedOrUpdated(const Job& job) {
     jobsModel_.upsertJob(job);
 
@@ -302,7 +379,6 @@ void MainWindow::notifyJobAddedOrUpdated(const Job& job) {
         refreshSelectedJobDetails();
     }
 }
-
 
 void MainWindow::notifyJobRemoved(const Job& job) {
     jobsModel_.removeJob(job.id);
@@ -351,7 +427,6 @@ void MainWindow::updatePositionInputModeUi() {
     topFormLayout_->setRowVisible(movesPlainTextEdit_, useMoves);
 }
 
-
 void MainWindow::onStartButtonClicked() {
     const QString opponent = opponentLineEdit_ ? opponentLineEdit_->text().trimmed() : QString();
 
@@ -366,9 +441,8 @@ void MainWindow::onStartButtonClicked() {
                                   : QString();
 
         if (moves.isEmpty()) {
-            QMessageBox::warning(
-                this, tr("Validation error"),
-                tr("Moves must not be empty."));
+            QMessageBox::warning(this, tr("Validation error"),
+                                 tr("Moves must not be empty."));
             return;
         }
 
@@ -384,14 +458,14 @@ void MainWindow::onStartButtonClicked() {
     } else {
         fen = fenLineEdit_ ? fenLineEdit_->text().trimmed() : QString();
         if (fen.isEmpty()) {
-            QMessageBox::warning(
-                this, tr("Validation error"),
-                tr("FEN must not be empty."));
+            QMessageBox::warning(this, tr("Validation error"),
+                                 tr("FEN must not be empty."));
             return;
         }
     }
 
-    const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt() : static_cast<int>(LimitType::Depth);
+    const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt()
+                                              : static_cast<int>(LimitType::Depth);
     const int limitValue    = limitValueSpin_ ? limitValueSpin_->value() : 30;
     SearchLimit limit;
 
@@ -561,7 +635,6 @@ void MainWindow::updatePvAndBoardView(const Job& job) {
     boardWidget_->setHighlights(hl);
 }
 
-
 std::vector<Job> MainWindow::collectJobsForExport() const {
     std::vector<Job> jobs;
 
@@ -634,6 +707,100 @@ void MainWindow::exportJobsToPgn() {
     const QString pgn = JobExporter::toPgn(jobs);
     file.write(pgn.toUtf8());
     file.close();
+}
+
+// ---------------- ICCF slots ----------------
+
+void MainWindow::onIccfRefreshClicked() {
+    if (!iccfSync_) {
+        QMessageBox::information(this, tr("ICCF"),
+                                 tr("ICCF is not wired. Use the constructor overload with IccfSyncManager*."));
+        return;
+    }
+
+    sf::client::app::IccfSyncManager::Credentials c;
+    c.endpointUrl = iccfEndpointLineEdit_ ? iccfEndpointLineEdit_->text().trimmed() : QString();
+    c.username = iccfUsernameLineEdit_ ? iccfUsernameLineEdit_->text().trimmed() : QString();
+    c.password = iccfPasswordLineEdit_ ? iccfPasswordLineEdit_->text() : QString();
+
+    iccfSync_->setCredentials(std::move(c));
+    iccfSync_->refreshNow();
+}
+
+void MainWindow::onIccfAnalyzeClicked() {
+    if (!iccfGamesTableView_) return;
+
+    const auto selected = iccfGamesTableView_->selectionModel()
+                              ? iccfGamesTableView_->selectionModel()->selectedRows()
+                              : QModelIndexList{};
+    if (selected.isEmpty()) {
+        QMessageBox::information(this, tr("ICCF"), tr("Select a game first."));
+        return;
+    }
+
+    const int row = selected.first().row();
+    const auto* g = iccfGamesModel_.gameAt(row);
+    if (!g) {
+        QMessageBox::warning(this, tr("ICCF"), tr("Invalid selection."));
+        return;
+    }
+
+    const QString label = QStringLiteral("ICCF #%1: %2 vs %3")
+                              .arg(g->id)
+                              .arg(g->white)
+                              .arg(g->black);
+
+    std::optional<std::string> startFen;
+    if (g->setup && !g->fen.trimmed().isEmpty()) {
+        startFen = g->fen.toStdString();
+    }
+
+    const auto res = sf::client::domain::chess::fenFromSanMoves(g->moves.toStdString(), startFen);
+    if (!res.ok) {
+        QMessageBox::warning(this, tr("ICCF"),
+                             tr("Failed to parse/apply ICCF moves.\n\n%1")
+                                 .arg(QString::fromStdString(res.error)));
+        return;
+    }
+
+    const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt()
+                                              : static_cast<int>(LimitType::Depth);
+    const int limitValue    = limitValueSpin_ ? limitValueSpin_->value() : 30;
+
+    SearchLimit limit;
+    switch (static_cast<LimitType>(limitTypeInt)) {
+        case LimitType::Depth:  limit = sf::client::domain::depth(limitValue); break;
+        case LimitType::TimeMs: limit = sf::client::domain::movetime_ms(limitValue); break;
+        case LimitType::Nodes:  limit = sf::client::domain::nodes(limitValue); break;
+    }
+
+    std::optional<std::string> preferredServer;
+    const QString serverId = serverCombo_ ? serverCombo_->currentData().toString() : QString();
+    if (!serverId.isEmpty()) {
+        preferredServer = serverId.toStdString();
+    }
+
+    const int multiPv = multiPvSpin_ ? multiPvSpin_->value() : 1;
+
+    jobManager_.enqueueJob(label.toStdString(),
+                           res.fen,
+                           limit,
+                           multiPv,
+                           preferredServer);
+}
+
+void MainWindow::onIccfGamesUpdated(QVector<sf::client::infra::iccf::IccfGame> games) {
+    iccfGamesModel_.setGames(std::move(games));
+    if (statusBar()) {
+        statusBar()->showMessage(tr("ICCF games updated."), 3000);
+    }
+}
+
+void MainWindow::onIccfError(const QString& message) {
+    if (statusBar()) {
+        statusBar()->showMessage(message, 6000);
+    }
+    QMessageBox::warning(this, tr("ICCF"), message);
 }
 
 } // namespace sf::client::ui

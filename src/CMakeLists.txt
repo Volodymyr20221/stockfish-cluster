@@ -47,6 +47,8 @@ add_executable(sf_cluster_client
     ui/ServersModel.cpp
     ui/MainWindow.hpp
     ui/MainWindow.cpp
+    ui/IccfGamesModel.hpp
+    ui/IccfGamesModel.cpp
 
     ui/JobExporter.hpp
     ui/JobExporter.cpp

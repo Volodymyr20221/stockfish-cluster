@@ -5,6 +5,7 @@
 
 #include "ui/JobsModel.hpp"
 #include "ui/ServersModel.hpp"
+#include "ui/IccfGamesModel.hpp"
 #include "app/JobManager.hpp"
 #include "app/ServerManager.hpp"
 
@@ -22,6 +23,7 @@ class QVBoxLayout;
 
 namespace sf::client::app {
 class IHistoryRepository;
+class IccfSyncManager;
 }
 
 namespace sf::client::ui {
@@ -32,10 +34,19 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
+    // Old signature preserved (no ICCF wiring).
     MainWindow(sf::client::app::JobManager& jobManager,
                sf::client::app::ServerManager& serverManager,
                sf::client::app::IHistoryRepository* historyRepo = nullptr,
                QWidget* parent = nullptr);
+
+    // New overload: ICCF wired (read-only GetMyGames + Analyze).
+    MainWindow(sf::client::app::JobManager& jobManager,
+               sf::client::app::ServerManager& serverManager,
+               sf::client::app::IHistoryRepository* historyRepo,
+               sf::client::app::IccfSyncManager* iccfSync,
+               QWidget* parent = nullptr);
+
     ~MainWindow() override;
 
     void notifyJobAddedOrUpdated(const sf::client::domain::Job& job);
@@ -48,6 +59,12 @@ private slots:
     void exportJobsToJson();
     void exportJobsToPgn();
 
+    // ICCF
+    void onIccfRefreshClicked();
+    void onIccfAnalyzeClicked();
+    void onIccfGamesUpdated(QVector<sf::client::infra::iccf::IccfGame> games);
+    void onIccfError(const QString& message);
+
 private:
     void setupUi();
     void setupMenu();
@@ -59,6 +76,9 @@ private:
     void setupConnections();
     void updateLogForSelectedRow(int row);
     void refreshServersTable();
+
+    // ICCF
+    void setupIccfTab();
 
     // Selection helpers (reduce branching / keep UI code on one abstraction level)
     QItemSelectionModel* jobsSelectionModel() const;
@@ -105,12 +125,24 @@ private:
 
     QTableView*     serversTableView_{nullptr};
 
+    // ICCF UI
+    QLineEdit*   iccfEndpointLineEdit_{nullptr};
+    QLineEdit*   iccfUsernameLineEdit_{nullptr};
+    QLineEdit*   iccfPasswordLineEdit_{nullptr};
+    QPushButton* iccfRefreshButton_{nullptr};
+    QPushButton* iccfAnalyzeButton_{nullptr};
+    QTableView*  iccfGamesTableView_{nullptr};
+
     JobsModel       jobsModel_;
     ServersModel    serversModel_;
+    IccfGamesModel  iccfGamesModel_;
 
     sf::client::app::JobManager&    jobManager_;
     sf::client::app::ServerManager& serverManager_;
     sf::client::app::IHistoryRepository* historyRepo_{nullptr};
+
+    // ICCF (optional)
+    sf::client::app::IccfSyncManager* iccfSync_{nullptr};
 
     QTimer* serversRefreshTimer_{nullptr};
 };

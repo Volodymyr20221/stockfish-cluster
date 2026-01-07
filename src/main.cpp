@@ -8,6 +8,7 @@
 #include "infra/HistoryRepository.hpp"
 #include "app/ServerManager.hpp"
 #include "app/JobManager.hpp"
+#include "app/IccfSyncManager.hpp"   // <-- ADD
 #include "net/JobNetworkController.hpp"
 #include "ui/MainWindow.hpp"
 
@@ -39,7 +40,11 @@ int main(int argc, char* argv[]) {
     sf::client::net::JobNetworkController netController(jobManager, serverManager);
     netController.initializeConnections(serverManager.servers());
 
-    sf::client::ui::MainWindow w(jobManager, serverManager, &historyRepo);
+    // ICCF sync manager (GetMyGames, read-only for now).
+    sf::client::app::IccfSyncManager iccfSync(&app);
+
+    // Use NEW MainWindow overload with ICCF wiring:
+    sf::client::ui::MainWindow w(jobManager, serverManager, &historyRepo, &iccfSync);
     w.show();
 
     sf::client::app::JobManagerCallbacks cb;
