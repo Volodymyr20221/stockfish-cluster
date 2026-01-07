@@ -1024,6 +1024,165 @@ std::optional<Move> pickMoveBySpec(const Position& pos, const MoveSpec& spec, st
     return matches.front();
 }
 
+
+struct AppliedPly {
+    int plyIndex{0};
+    std::string san;
+    std::string uci;
+    std::string fenAfter;
+    std::uint64_t posHashBefore{0};
+};
+
+std::string fenKeyNoCounters(const Position& pos) {
+    // FEN key that ignores halfmove/fullmove counters.
+    std::string placement;
+    placement.reserve(80);
+    for (int r = 7; r >= 0; --r) {
+        int emptyRun = 0;
+        for (int f = 0; f < 8; ++f) {
+            const Piece p = pos.board[sqOf(f, r)];
+            if (p == Piece::Empty) {
+                ++emptyRun;
+            } else {
+                if (emptyRun > 0) {
+                    placement.push_back(static_cast<char>('0' + emptyRun));
+                    emptyRun = 0;
+                }
+                placement.push_back(pieceToFenChar(p));
+            }
+        }
+        if (emptyRun > 0) {
+            placement.push_back(static_cast<char>('0' + emptyRun));
+        }
+        if (r != 0) placement.push_back('/');
+    }
+
+    std::string cast;
+    if (pos.wK) cast.push_back('K');
+    if (pos.wQ) cast.push_back('Q');
+    if (pos.bK) cast.push_back('k');
+    if (pos.bQ) cast.push_back('q');
+    if (cast.empty()) cast = "-";
+
+    const std::string ep = pos.epSq ? sqToAlg(*pos.epSq) : "-";
+
+    std::string out;
+    out.reserve(placement.size() + 1 + 1 + 1 + cast.size() + 1 + ep.size());
+    out += placement;
+    out.push_back(' ');
+    out.push_back((pos.stm == Color::White) ? 'w' : 'b');
+    out.push_back(' ');
+    out += cast;
+    out.push_back(' ');
+    out += ep;
+    return out;
+}
+
+std::uint64_t fnv1a64(std::string_view s) {
+    // FNV-1a 64-bit
+    std::uint64_t h = 14695981039346656037ull;
+    for (unsigned char c : s) {
+        h ^= static_cast<std::uint64_t>(c);
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+std::uint64_t positionHashNoCounters(const Position& pos) {
+    const std::string key = fenKeyNoCounters(pos);
+    return fnv1a64(key);
+}
+
+std::string moveToUci(const Move& m) {
+    std::string s;
+    s.reserve(5);
+    s += sqToAlg(m.from);
+    s += sqToAlg(m.to);
+    if (m.promotion != Piece::Empty) {
+        const char pc = pieceToFenChar(m.promotion);
+        if (pc) {
+            s.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(pc))));
+        }
+    }
+    return s;
+}
+
+struct ApplySanResult {
+    bool ok{false};
+    std::string error;
+    int plyCount{0};
+};
+
+ApplySanResult applySanTokens(Position& pos,
+                             const std::vector<std::string>& tokens,
+                             std::vector<AppliedPly>* outTimeline) {
+    ApplySanResult r;
+
+    int ply = 0;
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+        const std::string t = stripPgnDecorations(stripLeadingMoveNumber(tokens[idx]));
+        if (t.empty()) continue;
+        if (isMoveResultToken(t)) break;
+
+        const auto specOpt = parseSanToken(t);
+        if (!specOpt) {
+            r.ok = false;
+            r.error = "Cannot parse SAN token #" + std::to_string(idx + 1) + ": '" + t + "'";
+            return r;
+        }
+        const MoveSpec spec = *specOpt;
+
+        // Castling needs extra legality (passing through check) checked on pre-move position.
+        if (spec.kind == PieceKind::CastleK) {
+            if (!pos.castlePathLegal(pos.stm, true)) {
+                r.ok = false;
+                r.error = "Illegal castle (through check) at token #" + std::to_string(idx + 1) + ": '" + t + "'";
+                return r;
+            }
+        }
+        if (spec.kind == PieceKind::CastleQ) {
+            if (!pos.castlePathLegal(pos.stm, false)) {
+                r.ok = false;
+                r.error = "Illegal castle (through check) at token #" + std::to_string(idx + 1) + ": '" + t + "'";
+                return r;
+            }
+        }
+
+        std::string err;
+        auto mv = pickMoveBySpec(pos, spec, err);
+        if (!mv) {
+            r.ok = false;
+            r.error = err + " at token #" + std::to_string(idx + 1) + ": '" + t + "'";
+            return r;
+        }
+
+        AppliedPly rec;
+        if (outTimeline) {
+            rec.plyIndex = ply;
+            rec.san = t;
+            rec.uci = moveToUci(*mv);
+            rec.posHashBefore = positionHashNoCounters(pos);
+        }
+
+        if (!pos.applyMove(*mv)) {
+            r.ok = false;
+            r.error = "Failed to apply move at token #" + std::to_string(idx + 1) + ": '" + t + "'";
+            return r;
+        }
+
+        if (outTimeline) {
+            rec.fenAfter = pos.toFen();
+            outTimeline->push_back(std::move(rec));
+        }
+
+        ++ply;
+    }
+
+    r.ok = true;
+    r.plyCount = ply;
+    return r;
+}
+
 } // namespace
 
 FenFromSanResult fenFromSanMoves(const std::string& sanMoves,
@@ -1050,55 +1209,65 @@ FenFromSanResult fenFromSanMoves(const std::string& sanMoves,
         return res;
     }
 
-    int ply = 0;
-    for (const auto& tRaw : tokens) {
-        const std::string t = stripPgnDecorations(stripLeadingMoveNumber(tRaw));
-        if (t.empty()) continue;
-        if (isMoveResultToken(t)) break;
-
-        const auto specOpt = parseSanToken(t);
-        if (!specOpt) {
-            res.ok = false;
-            res.error = "Cannot parse SAN token: '" + t + "'";
-            return res;
-        }
-
-        const MoveSpec spec = *specOpt;
-
-        // Castling needs extra legality (passing through check) checked on pre-move position.
-        if (spec.kind == PieceKind::CastleK) {
-            if (!pos.castlePathLegal(pos.stm, true)) {
-                res.ok = false;
-                res.error = "Illegal castle (through check) at token: '" + t + "'";
-                return res;
-            }
-        }
-        if (spec.kind == PieceKind::CastleQ) {
-            if (!pos.castlePathLegal(pos.stm, false)) {
-                res.ok = false;
-                res.error = "Illegal castle (through check) at token: '" + t + "'";
-                return res;
-            }
-        }
-
-        std::string err;
-        auto mv = pickMoveBySpec(pos, spec, err);
-        if (!mv) {
-            res.ok = false;
-            res.error = err + ": '" + t + "'";
-            return res;
-        }
-        if (!pos.applyMove(*mv)) {
-            res.ok = false;
-            res.error = "Failed to apply move: '" + t + "'";
-            return res;
-        }
-        ++ply;
+    const auto r = applySanTokens(pos, tokens, nullptr);
+    if (!r.ok) {
+        res.ok = false;
+        res.error = r.error;
+        return res;
     }
 
     res.ok = true;
     res.fen = pos.toFen();
-    res.plyCount = ply;
+    res.plyCount = r.plyCount;
+    return res;
+}
+
+FenTimelineResult fenTimelineFromSanMoves(const std::string& sanMoves,
+                                         const std::optional<std::string>& startFen) {
+    FenTimelineResult res;
+
+    Position pos;
+    if (startFen) {
+        auto p = Position::fromFen(*startFen);
+        if (!p) {
+            res.ok = false;
+            res.error = "Invalid start FEN";
+            return res;
+        }
+        pos = *p;
+    } else {
+        pos = Position::startpos();
+    }
+
+    res.startFen = pos.toFen();
+
+    const auto tokens = tokenizeMoves(sanMoves);
+    if (tokens.empty()) {
+        res.ok = true;
+        return res;
+    }
+
+    std::vector<AppliedPly> tl;
+    tl.reserve(tokens.size());
+
+    const auto r = applySanTokens(pos, tokens, &tl);
+    if (!r.ok) {
+        res.ok = false;
+        res.error = r.error;
+        return res;
+    }
+
+    res.ok = true;
+    res.plies.reserve(tl.size());
+    for (auto& p : tl) {
+        FenTimelinePly o;
+        o.plyIndex = p.plyIndex;
+        o.san = std::move(p.san);
+        o.uci = std::move(p.uci);
+        o.fenAfter = std::move(p.fenAfter);
+        o.posHashBefore = p.posHashBefore;
+        res.plies.push_back(std::move(o));
+    }
     return res;
 }
 
