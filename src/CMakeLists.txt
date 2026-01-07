@@ -31,6 +31,8 @@ add_executable(sf_cluster_client
     app/ServerManager.cpp
     app/JobManager.hpp
     app/JobManager.cpp
+    app/IccfSyncManager.hpp
+    app/IccfSyncManager.cpp
 
     net/JobConnection.hpp
     net/JobConnection.cpp

@@ -32,10 +32,12 @@ IccfGame parseGame(QXmlStreamReader& x) {
         const QString val = readElementTextTrimmed(x);
 
         if (n == QStringLiteral("id")) g.id = toIntSafe(val);
+
         else if (n == QStringLiteral("white")) g.white = val;
         else if (n == QStringLiteral("black")) g.black = val;
         else if (n == QStringLiteral("event")) g.event = val;
         else if (n == QStringLiteral("site")) g.site = val;
+
         else if (n == QStringLiteral("myTurn")) g.myTurn = toBool(val);
         else if (n == QStringLiteral("hasWhite")) g.hasWhite = toBool(val);
 
@@ -54,8 +56,23 @@ IccfGame parseGame(QXmlStreamReader& x) {
         else if (n == QStringLiteral("serverInfo")) g.serverInfo = val;
         else if (n == QStringLiteral("gameLink")) g.gameLink = val;
 
+        else if (n == QStringLiteral("whiteTitle")) g.whiteTitle = val;
+        else if (n == QStringLiteral("blackTitle")) g.blackTitle = val;
+        else if (n == QStringLiteral("whiteElo")) g.whiteElo = toIntSafe(val);
+        else if (n == QStringLiteral("blackElo")) g.blackElo = toIntSafe(val);
+        else if (n == QStringLiteral("whiteNA")) g.whiteNA = val;
+        else if (n == QStringLiteral("blackNA")) g.blackNA = val;
+        else if (n == QStringLiteral("eventSponsor")) g.eventSponsor = val;
+        else if (n == QStringLiteral("section")) g.section = val;
+        else if (n == QStringLiteral("stage")) g.stage = val;
+        else if (n == QStringLiteral("board")) g.board = val;
+        else if (n == QStringLiteral("timeControl")) g.timeControl = val;
+        else if (n == QStringLiteral("variant")) g.variant = val;
+        else if (n == QStringLiteral("eventDate")) g.eventDate = val;
+
         else if (n == QStringLiteral("setup")) g.setup = toBool(val);
         else if (n == QStringLiteral("fen")) g.fen = val;
+
         else if (n == QStringLiteral("result")) g.result = val;
         else {
             // Ignore unknown fields (spec allows server-specific extensions).

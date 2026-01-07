@@ -37,6 +37,21 @@ struct IccfGame {
     QString serverInfo;
     QString gameLink;
 
+    // Optional PGN-derived fields
+    QString whiteTitle;
+    QString blackTitle;
+    int whiteElo = 0;
+    int blackElo = 0;
+    QString whiteNA;
+    QString blackNA;
+    QString eventSponsor;
+    QString section;
+    QString stage;
+    QString board;
+    QString timeControl;
+    QString variant;
+    QString eventDate;
+
     bool setup = false;
     QString fen;
     QString result; // enum as string (e.g. Ongoing, WhiteWins, Draw ...)

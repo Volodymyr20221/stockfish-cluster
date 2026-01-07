@@ -773,11 +773,12 @@ std::string stripLeadingMoveNumber(std::string s) {
 }
 
 std::string removePgnCommentsAndVars(const std::string& in) {
-    // Removes {...} comments, ; line comments, and (...) variations (supports nesting).
+    // Removes {...} comments, ; line comments, (...) variations and [ ... ] tags (supports nesting where applicable).
     std::string out;
     out.reserve(in.size());
     int brace = 0;
     int paren = 0;
+    int bracket = 0; // PGN tags / clock comments like [%clk ...]
     bool inSemiComment = false;
     for (size_t i = 0; i < in.size(); ++i) {
         const char c = in[i];
@@ -795,16 +796,23 @@ std::string removePgnCommentsAndVars(const std::string& in) {
             else if (c == ')') --paren;
             continue;
         }
+        if (bracket > 0) {
+            if (c == '[') ++bracket;
+            else if (c == ']') --bracket;
+            continue;
+        }
         if (c == ';') {
             inSemiComment = true;
             continue;
         }
         if (c == '{') { brace = 1; continue; }
         if (c == '(') { paren = 1; continue; }
+        if (c == '[') { bracket = 1; continue; }
         out.push_back(c);
     }
     return out;
 }
+
 
 std::vector<std::string> tokenizeMoves(const std::string& text) {
     std::vector<std::string> tokens;
