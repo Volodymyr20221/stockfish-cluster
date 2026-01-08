@@ -340,7 +340,9 @@ void MainWindow::setupIccfTab() {
     auto* buttonsLayout = new QHBoxLayout();
     iccfRefreshButton_ = new QPushButton(tr("Refresh"), tab);
     iccfAnalyzeButton_ = new QPushButton(tr("Analyze selected"), tab);
+    iccfOpenViewerButton_ = new QPushButton(tr("Open in viewer"), tab);
     buttonsLayout->addWidget(iccfRefreshButton_);
+    buttonsLayout->addWidget(iccfOpenViewerButton_);
     buttonsLayout->addWidget(iccfAnalyzeButton_);
     buttonsLayout->addStretch(1);
     layout->addLayout(buttonsLayout);
@@ -357,6 +359,7 @@ void MainWindow::setupIccfTab() {
     if (!iccfSync_) {
         iccfRefreshButton_->setEnabled(false);
         iccfAnalyzeButton_->setEnabled(false);
+        iccfOpenViewerButton_->setEnabled(false);
         iccfUsernameLineEdit_->setPlaceholderText(tr("ICCF is not wired (use constructor overload with IccfSyncManager*)"));
     }
 
@@ -389,6 +392,10 @@ void MainWindow::setupConnections() {
     if (iccfAnalyzeButton_) {
         connect(iccfAnalyzeButton_, &QPushButton::clicked,
                 this, &MainWindow::onIccfAnalyzeClicked);
+    }
+    if (iccfOpenViewerButton_) {
+        connect(iccfOpenViewerButton_, &QPushButton::clicked,
+                this, &MainWindow::onIccfOpenViewerClicked);
     }
 
     if (iccfSync_) {
@@ -857,6 +864,68 @@ void MainWindow::onIccfAnalyzeClicked() {
     }
 
     enqueueJobWithFen(label, QString::fromStdString(res.fen));
+}
+
+void MainWindow::onIccfOpenViewerClicked() {
+    if (!iccfGamesTableView_) return;
+
+    const auto selected = iccfGamesTableView_->selectionModel()
+                              ? iccfGamesTableView_->selectionModel()->selectedRows()
+                              : QModelIndexList{};
+    if (selected.isEmpty()) {
+        QMessageBox::information(this, tr("ICCF"), tr("Select a game first."));
+        return;
+    }
+
+    const int row = selected.first().row();
+    const auto* g = iccfGamesModel_.gameAt(row);
+    if (!g) {
+        QMessageBox::warning(this, tr("ICCF"), tr("Invalid selection."));
+        return;
+    }
+
+    const QString label = QStringLiteral("ICCF #%1: %2 vs %3")
+                              .arg(g->id)
+                              .arg(g->white)
+                              .arg(g->black);
+
+    GameViewerDialog::Meta meta;
+    meta.event  = g->event;
+    meta.site   = g->site;
+    meta.date   = g->eventDate;
+    meta.white  = g->white;
+    meta.black  = g->black;
+    meta.result = g->result;
+
+    if (g->setup && !g->fen.trimmed().isEmpty()) {
+        meta.startFen = g->fen.trimmed();
+    }
+
+    std::optional<std::string> startFen;
+    if (!meta.startFen.isEmpty()) {
+        startFen = meta.startFen.toStdString();
+    }
+
+    const auto timeline = sf::client::domain::chess::fenTimelineFromSanMoves(
+        g->moves.toStdString(), startFen);
+
+    auto* dlg = new GameViewerDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+
+    QString err;
+    if (!dlg->setGame(meta, timeline, &err)) {
+        QMessageBox::warning(this, tr("ICCF"),
+                             tr("Failed to build moves timeline.\n\n%1").arg(err));
+        dlg->deleteLater();
+        return;
+    }
+
+    connect(dlg, &GameViewerDialog::analyzeRequested,
+            this, [this, label](const QString& fen, const QString&) {
+                enqueueJobWithFen(label, fen);
+            });
+
+    dlg->show();
 }
 
 void MainWindow::onIccfGamesUpdated(QVector<sf::client::infra::iccf::IccfGame> games) {

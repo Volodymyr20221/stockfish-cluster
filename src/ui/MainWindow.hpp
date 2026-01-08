@@ -63,6 +63,7 @@ private slots:
     // ICCF
     void onIccfRefreshClicked();
     void onIccfAnalyzeClicked();
+    void onIccfOpenViewerClicked();
     void onIccfGamesUpdated(QVector<sf::client::infra::iccf::IccfGame> games);
     void onIccfError(const QString& message);
 
@@ -134,6 +135,7 @@ private:
     QLineEdit*   iccfPasswordLineEdit_{nullptr};
     QPushButton* iccfRefreshButton_{nullptr};
     QPushButton* iccfAnalyzeButton_{nullptr};
+    QPushButton* iccfOpenViewerButton_{nullptr};
     QTableView*  iccfGamesTableView_{nullptr};
 
     JobsModel       jobsModel_;
