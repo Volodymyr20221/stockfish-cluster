@@ -7,15 +7,15 @@
 #include <string>
 #include <vector>
 
+namespace sf::client::domain::chess {
+struct FenTimelineResult;
+} // namespace sf::client::domain::chess
+
 QT_BEGIN_NAMESPACE
 class QListWidget;
 class QLabel;
 class QPushButton;
 QT_END_NAMESPACE
-
-namespace sf::client::domain::chess {
-struct FenTimelineResult;
-} // namespace sf::client::domain::chess
 
 namespace sf::client::ui {
 

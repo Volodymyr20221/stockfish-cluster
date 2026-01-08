@@ -58,6 +58,7 @@ private slots:
     void onJobSelectionChanged();
     void exportJobsToJson();
     void exportJobsToPgn();
+    void openPgnFile();
 
     // ICCF
     void onIccfRefreshClicked();
@@ -97,6 +98,8 @@ private:
     void updatePvAndBoardView(const sf::client::domain::Job& job);
 
     std::vector<sf::client::domain::Job> collectJobsForExport() const;
+
+    void enqueueJobWithFen(const QString& opponent, const QString& fen);
 
 private:
     QWidget*        centralWidget_{nullptr};

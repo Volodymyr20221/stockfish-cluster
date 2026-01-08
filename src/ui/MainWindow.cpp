@@ -32,12 +32,15 @@
 #include <QTabWidget>
 #include <QTextCursor>
 #include <QTextStream>
+#include <QStringConverter>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include "domain/domain_model.hpp"
 #include "domain/chess_san_to_fen.hpp"
+#include "domain/pgn/PgnParser.hpp"
 #include "ui/BoardWidget.hpp"
+#include "ui/GameViewerDialog.hpp"
 #include "ui/JobExporter.hpp"
 #include <QTimeZone>
 
@@ -99,6 +102,12 @@ void MainWindow::setupUi() {
 void MainWindow::setupMenu() {
     auto* fileMenu = menuBar()->addMenu(tr("&File"));
 
+    auto* openPgnAction = fileMenu->addAction(tr("Open PGN..."));
+    connect(openPgnAction, &QAction::triggered,
+            this, &MainWindow::openPgnFile);
+
+    fileMenu->addSeparator();
+
     auto* exportJsonAction =
         fileMenu->addAction(tr("Export jobs to JSON"));
     connect(exportJsonAction, &QAction::triggered,
@@ -108,6 +117,86 @@ void MainWindow::setupMenu() {
         fileMenu->addAction(tr("Export jobs to PGN"));
     connect(exportPgnAction, &QAction::triggered,
             this, &MainWindow::exportJobsToPgn);
+}
+
+void MainWindow::openPgnFile() {
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("Open PGN"),
+        QString(),
+        tr("PGN files (*.pgn *.PGN);;All files (*.*)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Open PGN"),
+                             tr("Failed to open file:\n%1").arg(path));
+        return;
+    }
+
+    QTextStream ts(&f);
+    ts.setEncoding(QStringConverter::Utf8);
+    const QString text = ts.readAll();
+
+    const auto parsed = sf::client::domain::pgn::parsePgnText(text.toStdString(), 1);
+    if (!parsed.ok) {
+        QMessageBox::warning(this, tr("PGN parse error"),
+                             tr("Failed to parse PGN:\n\n%1")
+                                 .arg(QString::fromStdString(parsed.error)));
+        return;
+    }
+    if (parsed.games.empty()) {
+        QMessageBox::warning(this, tr("Open PGN"), tr("No games found in the PGN file."));
+        return;
+    }
+
+    const auto& g = parsed.games.front();
+    auto tag = [&](const char* key) -> QString {
+        const auto it = g.tags.find(key);
+        if (it == g.tags.end()) {
+            return {};
+        }
+        return QString::fromStdString(it->second).trimmed();
+    };
+
+    GameViewerDialog::Meta meta;
+    meta.event  = tag("Event");
+    meta.site   = tag("Site");
+    meta.date   = tag("Date");
+    meta.round  = tag("Round");
+    meta.white  = tag("White");
+    meta.black  = tag("Black");
+    meta.result = tag("Result");
+
+    // SetUp/FEN tags: use FEN when present.
+    meta.startFen = tag("FEN");
+    std::optional<std::string> startFen;
+    if (!meta.startFen.isEmpty()) {
+        startFen = meta.startFen.toStdString();
+    }
+
+    const auto timeline = sf::client::domain::chess::fenTimelineFromSanMoves(
+        g.movetext, startFen);
+
+    auto* dlg = new GameViewerDialog(this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+
+    QString err;
+    if (!dlg->setGame(meta, timeline, &err)) {
+        QMessageBox::warning(this, tr("Open PGN"),
+                             tr("Failed to build moves timeline:\n\n%1").arg(err));
+        dlg->deleteLater();
+        return;
+    }
+
+    connect(dlg, &GameViewerDialog::analyzeRequested,
+            this, [this](const QString& fen, const QString& opponentHint) {
+                enqueueJobWithFen(opponentHint, fen);
+            });
+
+    dlg->show();
 }
 
 void MainWindow::setupTopForm(QVBoxLayout* mainLayout) {
@@ -464,6 +553,10 @@ void MainWindow::onStartButtonClicked() {
         }
     }
 
+    enqueueJobWithFen(opponent, fen);
+}
+
+void MainWindow::enqueueJobWithFen(const QString& opponent, const QString& fen) {
     const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt()
                                               : static_cast<int>(LimitType::Depth);
     const int limitValue    = limitValueSpin_ ? limitValueSpin_->value() : 30;
@@ -763,30 +856,7 @@ void MainWindow::onIccfAnalyzeClicked() {
         return;
     }
 
-    const int limitTypeInt  = limitTypeCombo_ ? limitTypeCombo_->currentData().toInt()
-                                              : static_cast<int>(LimitType::Depth);
-    const int limitValue    = limitValueSpin_ ? limitValueSpin_->value() : 30;
-
-    SearchLimit limit;
-    switch (static_cast<LimitType>(limitTypeInt)) {
-        case LimitType::Depth:  limit = sf::client::domain::depth(limitValue); break;
-        case LimitType::TimeMs: limit = sf::client::domain::movetime_ms(limitValue); break;
-        case LimitType::Nodes:  limit = sf::client::domain::nodes(limitValue); break;
-    }
-
-    std::optional<std::string> preferredServer;
-    const QString serverId = serverCombo_ ? serverCombo_->currentData().toString() : QString();
-    if (!serverId.isEmpty()) {
-        preferredServer = serverId.toStdString();
-    }
-
-    const int multiPv = multiPvSpin_ ? multiPvSpin_->value() : 1;
-
-    jobManager_.enqueueJob(label.toStdString(),
-                           res.fen,
-                           limit,
-                           multiPv,
-                           preferredServer);
+    enqueueJobWithFen(label, QString::fromStdString(res.fen));
 }
 
 void MainWindow::onIccfGamesUpdated(QVector<sf::client::infra::iccf::IccfGame> games) {
