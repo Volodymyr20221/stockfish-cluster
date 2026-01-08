@@ -25,6 +25,8 @@ add_executable(sf_cluster_client
     infra/ServerConfigRepository.cpp
     infra/HistoryRepository.hpp
     infra/HistoryRepository.cpp
+    infra/refdb/ReferenceDbRepository.hpp
+    infra/refdb/ReferenceDbRepository.cpp
     infra/iccf/IccfModels.hpp
     infra/iccf/IccfXfccParser.hpp
     infra/iccf/IccfXfccParser.cpp
