@@ -20,6 +20,8 @@ add_executable(sf_cluster_client
     domain/chess_san_to_fen.cpp
     domain/pgn/PgnParser.hpp
     domain/pgn/PgnParser.cpp
+    domain/pgn/PgnStreamScanner.hpp
+    domain/pgn/PgnStreamScanner.cpp
 
     infra/ServerConfigRepository.hpp
     infra/ServerConfigRepository.cpp
